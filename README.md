@@ -113,6 +113,4 @@ Contributions are welcome! Feel free to fork the repository and submit a pull re
 
 This project is open-source and available under the [MIT License](LICENSE).
 
----
 
-This structure provides clear installation instructions, usage details, and an overview of the project’s features. Let me know if you want to adjust anything!
