@@ -13,6 +13,18 @@ For each request:
 
 Author-provider failures do not discard an otherwise valid book result. The current implementation is intentionally a lightweight prototype: provider responses are returned with minimal transformation, and author lookups run concurrently with a limit of five in-flight author lookups per request.
 
+## Design Decisions and Lessons Learned
+
+This project involved a few practical tradeoffs:
+
+- **Use separate providers for separate strengths.** Google Books is the source for book results, while Open Library and Wikidata add author context. This keeps the main search focused and lets author enrichment remain optional.
+- **Prefer partial results over total failure.** Author providers can be unavailable or incomplete, so their failures are logged and the book result is still returned. This makes the API more useful when external services are unreliable.
+- **Add concurrency with a limit.** Author lookups originally ran one at a time, which made responses slower as more books were requested. Bounded concurrency improves latency while avoiding an uncontrolled burst of requests to public APIs.
+- **Keep the response shape stable.** The service returns a consistent set of fields with fallback values when providers omit data. That makes the API easier for clients to consume even when upstream responses vary.
+- **Test provider behavior without network calls.** Mocked responses make validation fast and deterministic, while also making it possible to test rate limits, empty results, input validation, and the concurrency limit.
+
+The main lessons were that asynchronous code does not automatically make external I/O scalable, public APIs need explicit failure handling and rate-limit awareness, and a small concurrency limit can be a useful improvement without introducing a full caching or job-processing system.
+
 ## Requirements
 
 - Python 3.10 or newer
