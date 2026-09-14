@@ -1,3 +1,5 @@
+import asyncio
+
 import requests
 
 from fastapi.testclient import TestClient
@@ -101,3 +103,31 @@ def test_google_books_rate_limit_returns_service_unavailable(monkeypatch):
 
     assert response.status_code == 503
     assert "rate limit" in response.json()["detail"]
+
+
+def test_author_lookups_are_concurrent_and_bounded(monkeypatch):
+    active_lookups = 0
+    max_active_lookups = 0
+
+    async def fake_author_info(author_name):
+        nonlocal active_lookups, max_active_lookups
+        active_lookups += 1
+        max_active_lookups = max(max_active_lookups, active_lookups)
+        await asyncio.sleep(0)
+        active_lookups -= 1
+        return {"author": author_name}
+
+    monkeypatch.setattr(main, "fetch_author_info", fake_author_info)
+
+    async def run_lookups():
+        semaphore = asyncio.Semaphore(main.AUTHOR_LOOKUP_CONCURRENCY)
+        return await asyncio.gather(*(
+            main.fetch_author_info_limited(f"Author {index}", semaphore)
+            for index in range(main.AUTHOR_LOOKUP_CONCURRENCY + 1)
+        ))
+
+    results = asyncio.run(run_lookups())
+
+    assert len(results) == main.AUTHOR_LOOKUP_CONCURRENCY + 1
+    assert max_active_lookups > 1
+    assert max_active_lookups <= main.AUTHOR_LOOKUP_CONCURRENCY

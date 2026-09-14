@@ -11,7 +11,7 @@ For each request:
 3. It searches Open Library and Wikidata using the first listed author.
 4. It returns the book data and best-effort author enrichment in one response.
 
-Author-provider failures do not discard an otherwise valid book result. The current implementation is intentionally a lightweight prototype: provider responses are returned with minimal transformation, and author lookups are performed sequentially for each book.
+Author-provider failures do not discard an otherwise valid book result. The current implementation is intentionally a lightweight prototype: provider responses are returned with minimal transformation, and author lookups run concurrently with a limit of five in-flight author lookups per request.
 
 ## Requirements
 

@@ -20,6 +20,7 @@ GOOGLE_BOOKS_API_URL = "https://www.googleapis.com/books/v1/volumes"
 OPEN_LIBRARY_AUTHOR_API = "https://openlibrary.org/search/authors.json"
 WIKIDATA_SEARCH_URL = "https://www.wikidata.org/w/api.php"
 REQUEST_TIMEOUT = 10
+AUTHOR_LOOKUP_CONCURRENCY = 5
 GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY")
 
 logging.basicConfig(
@@ -57,6 +58,7 @@ async def search_books(query: str = Query(..., min_length=1), maxResults: int = 
             raise HTTPException(status_code=404, detail="No books found.")
 
         book_data = []
+        author_names = []
         for book in books:
             volume_info = book.get("volumeInfo", {})
             title = volume_info.get("title", "Unknown Title")
@@ -84,7 +86,7 @@ async def search_books(query: str = Query(..., min_length=1), maxResults: int = 
 
             # Assuming the first author is the primary one
             author_name = authors[0] if authors else "Unknown Author"
-            author_info = await fetch_author_info(author_name)
+            author_names.append(author_name)
 
             book_data.append({
                 "title": title,
@@ -103,8 +105,16 @@ async def search_books(query: str = Query(..., min_length=1), maxResults: int = 
                 "canonical_volume_link": canonical_volume_link,
                 "isbn_10": isbn_10,
                 "isbn_13": isbn_13,
-                "author_info": author_info
+                "author_info": None
             })
+
+        author_semaphore = asyncio.Semaphore(AUTHOR_LOOKUP_CONCURRENCY)
+        author_info = await asyncio.gather(*(
+            fetch_author_info_limited(author_name, author_semaphore)
+            for author_name in author_names
+        ))
+        for book, info in zip(book_data, author_info):
+            book["author_info"] = info
 
         return {"books": book_data}
 
@@ -136,6 +146,11 @@ async def request_json(url: str, params: dict):
     )
     response.raise_for_status()
     return response.json()
+
+
+async def fetch_author_info_limited(author_name: str, semaphore: asyncio.Semaphore):
+    async with semaphore:
+        return await fetch_author_info(author_name)
 
 
 async def fetch_author_info(author_name: str):
