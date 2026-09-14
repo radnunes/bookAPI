@@ -1,116 +1,142 @@
 # Books API
 
-This FastAPI application allows you to search for books (by title or ISBN) using the [Google Books API](https://developers.google.com/books) and fetch additional author information from [Open Library](https://openlibrary.org/) and [Wikidata](https://www.wikidata.org/). It provides a simple interface to retrieve book details such as title, authors, published date, and more, along with additional author information from external APIs.
+A small FastAPI service for searching books by title or ISBN. Google Books provides the book results, while Open Library and Wikidata provide additional author information when available.
 
-## Features
+## How It Works
 
-- Search books by title or ISBN.
-- Retrieve detailed book information, including title, author, description, publisher, ISBN, and more.
-- Fetch author information from Open Library and Wikidata.
-- RESTful API built with FastAPI.
-- Easy to set up and run.
+For each request:
 
-## Installation
+1. The service searches Google Books.
+2. It extracts book details and ISBN identifiers from the returned volumes.
+3. It searches Open Library and Wikidata using the first listed author.
+4. It returns the book data and best-effort author enrichment in one response.
 
-1. Clone the repository:
-   ```sh
-   git clone https://github.com/radnunes/bookAPI.git
-   cd bookAPI
-   ```
+Author-provider failures do not discard an otherwise valid book result. The current implementation is intentionally a lightweight prototype: provider responses are returned with minimal transformation, and author lookups are performed sequentially for each book.
 
-2. Install dependencies:
-   ```sh
-   pip install -r requirements.txt
-   ```
+## Requirements
 
-3. Run the FastAPI server using Uvicorn:
-   ```sh
-   uvicorn main:app --port 8080 --reload
-   ```
+- Python 3.10 or newer
+- Internet access for Google Books, Open Library, and Wikidata requests
 
-4. Access the API by navigating to the following URL:
-   ```http
-   http://127.0.0.1:8080/docs
-   ```
+Dependencies are listed in `requirements.txt`.
 
-   The `/docs` endpoint provides an interactive Swagger UI to test the API endpoints.
+Google Books allows public requests, but its quota can be exhausted. To use a Google Books API key, set it before starting the server:
 
-## API Endpoints
+```sh
+export GOOGLE_BOOKS_API_KEY="your-api-key"
+```
+
+## Setup
+
+Create and activate a virtual environment:
+
+```sh
+python -m venv .venv
+source .venv/bin/activate
+```
+
+Install dependencies:
+
+```sh
+python -m pip install -r requirements.txt
+```
+
+Start the development server:
+
+```sh
+uvicorn main:app --host 127.0.0.1 --port 8080 --reload
+```
+
+The interactive API documentation is available at:
+
+```text
+http://127.0.0.1:8080/docs
+```
+
+## API
 
 ### `GET /search_books`
 
-Search for books by title or ISBN and return detailed information about the books and authors.
+Search for books by title, free-text query, or ISBN.
 
-#### Parameters
+#### Query parameters
 
-- `query` (required): The search term (book title or ISBN).
-- `maxResults` (optional, default: 5): The maximum number of results to return.
+| Parameter | Required | Default | Description |
+| --- | --- | --- | --- |
+| `query` | Yes | None | A book title, search phrase, or 10/13-digit ISBN. |
+| `maxResults` | No | `5` | Number of Google Books results to request. Must be between `1` and `40`. |
 
-#### Example Request
+Examples:
 
-```http
-http://127.0.0.1:8080/search_books?query=harry%20potter
+```sh
+curl "http://127.0.0.1:8080/search_books?query=harry%20potter"
 ```
 
-#### Example Response
+```sh
+curl "http://127.0.0.1:8080/search_books?query=0743273567"
+```
+
+For a 10- or 13-digit query, the service sends an ISBN-specific query to Google Books.
+
+#### Response shape
 
 ```json
 {
   "books": [
     {
-      "title": "Harry Potter and the Sorcerer's Stone",
-      "authors": ["J.K. Rowling"],
-      "published_date": "1997-06-26",
-      "description": "The first book in the Harry Potter series.",
-      "page_count": 309,
-      "categories": ["Fantasy"],
-      "thumbnail": "http://example.com/thumbnail.jpg",
+      "title": "The Great Gatsby",
+      "authors": ["F. Scott Fitzgerald"],
+      "published_date": "1925-04-10",
+      "description": "Book description",
+      "page_count": 180,
+      "categories": ["Fiction"],
+      "thumbnail": "https://books.google.com/thumbnail-url",
       "language": "en",
-      "publisher": "Bloomsbury",
-      "average_rating": 4.8,
-      "ratings_count": 5000,
-      "preview_link": "http://example.com/preview",
-      "info_link": "http://example.com/info",
-      "canonical_volume_link": "http://example.com/canonical",
-      "isbn_10": "1234567890",
-      "isbn_13": "9781234567890",
+      "publisher": "Publisher name",
+      "average_rating": 4.0,
+      "ratings_count": 100,
+      "preview_link": "https://books.google.com/preview-link",
+      "info_link": "https://books.google.com/info-link",
+      "canonical_volume_link": "https://books.google.com/canonical-link",
+      "isbn_10": "0743273567",
+      "isbn_13": "9780743273565",
       "author_info": {
-        "open_library": [...],
-        "wikidata": [...]
+        "open_library": [],
+        "wikidata": []
       }
     }
   ]
 }
 ```
 
-### `GET /docs`
+Some fields use fallback values or `null` when the upstream provider does not supply them.
 
-An auto-generated Swagger UI to interact with and test the API.
+#### Status codes
 
-## Technologies Used
+- `200`: Results returned.
+- `404`: No books matched the query.
+- `422`: Missing, blank, or invalid query parameters.
+- `502`: Google Books is unavailable or returned an upstream HTTP error.
+- `503`: Google Books rate limit or quota was reached. Configure `GOOGLE_BOOKS_API_KEY` or try again later.
+- `500`: Unexpected processing error.
 
-- **Python 3** – Main programming language.
-- **FastAPI** – Web framework for building the API.
-- **Requests** – HTTP library for making requests to external APIs.
-- **Open Library API** – To fetch author information.
-- **Wikidata API** – To fetch additional author data.
-- **Uvicorn** – ASGI server to run the FastAPI application.
+## Testing
 
-## Running Locally
+Tests use mocked provider responses, so they do not require network access or external API credentials.
 
-To run the server locally, use the following command:
 ```sh
-uvicorn main:app --port 8080 --reload
+.venv/bin/pytest -q
 ```
 
-This will start the FastAPI server on `http://127.0.0.1:8080`. You can use the Swagger UI (`/docs`) or make direct requests to the endpoints.
+## Project Files
 
-## Contributing
+- `main.py`: FastAPI application and provider integration.
+- `test_main.py`: API contract and validation tests.
+- `requirements.txt`: Runtime and test dependencies.
+- `.gitignore`: Local environment and generated-file exclusions.
 
-Contributions are welcome! Feel free to fork the repository and submit a pull request with improvements or bug fixes.
+## External APIs
 
-## License
-
-This project is open-source and available under the [MIT License](LICENSE).
-
-
+- [Google Books API](https://developers.google.com/books)
+- [Open Library API](https://openlibrary.org/developers/api)
+- [Wikidata API](https://www.wikidata.org/w/api.php)

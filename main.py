@@ -1,7 +1,11 @@
-from fastapi import FastAPI, HTTPException
-import requests
+import asyncio
 import logging
+import os
 import re
+
+import requests
+
+from fastapi import FastAPI, HTTPException, Query
 
 #run the server with
 #uvicorn main:app  --port 8080 --reload
@@ -15,6 +19,8 @@ app = FastAPI()
 GOOGLE_BOOKS_API_URL = "https://www.googleapis.com/books/v1/volumes"
 OPEN_LIBRARY_AUTHOR_API = "https://openlibrary.org/search/authors.json"
 WIKIDATA_SEARCH_URL = "https://www.wikidata.org/w/api.php"
+REQUEST_TIMEOUT = 10
+GOOGLE_BOOKS_API_KEY = os.getenv("GOOGLE_BOOKS_API_KEY")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,9 +28,13 @@ logging.basicConfig(
 )
 
 @app.get("/search_books")
-async def search_books(query: str, maxResults: int = 5):
+async def search_books(query: str = Query(..., min_length=1), maxResults: int = Query(5, ge=1, le=40)):
     """Search for books by name and return detailed information about the books and authors, including ISBN."""
     try:
+        query = query.strip()
+        if not query:
+            raise HTTPException(status_code=422, detail="Query must not be blank.")
+
         # Check if the query is an ISBN
         if re.match(r'^\d{10}$|^\d{13}$', query):
             # It's an ISBN, construct the query accordingly
@@ -33,10 +43,15 @@ async def search_books(query: str, maxResults: int = 5):
             google_query = query
 
 
+        google_params = {"q": google_query, "maxResults": maxResults}
+        if GOOGLE_BOOKS_API_KEY:
+            google_params["key"] = GOOGLE_BOOKS_API_KEY
+
         # Search for books on Google Books
-        response = requests.get(GOOGLE_BOOKS_API_URL, params={"q": query, "maxResults": maxResults})
-        response.raise_for_status()  # Raise an error for bad responses
-        books = response.json().get("items", [])
+        books = (await request_json(
+            GOOGLE_BOOKS_API_URL,
+            params=google_params
+        )).get("items", [])
 
         if not books:
             raise HTTPException(status_code=404, detail="No books found.")
@@ -93,9 +108,34 @@ async def search_books(query: str, maxResults: int = 5):
 
         return {"books": book_data}
 
-    except Exception as e:
-        logging.error(f"Error occurred: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except requests.HTTPError as error:
+        if error.response is not None and error.response.status_code == 429:
+            logging.warning("Google Books rate limit or quota exceeded")
+            raise HTTPException(
+                status_code=503,
+                detail="Google Books rate limit reached. Try again later or configure GOOGLE_BOOKS_API_KEY."
+            )
+        logging.exception("Google Books returned an HTTP error")
+        raise HTTPException(status_code=502, detail="Book search provider returned an error.")
+    except requests.RequestException:
+        logging.exception("Google Books request failed")
+        raise HTTPException(status_code=502, detail="Book search provider is unavailable.")
+    except Exception:
+        logging.exception("Error processing book search")
+        raise HTTPException(status_code=500, detail="Unable to process book search.")
+
+
+async def request_json(url: str, params: dict):
+    response = await asyncio.to_thread(
+        requests.get,
+        url,
+        params=params,
+        timeout=REQUEST_TIMEOUT
+    )
+    response.raise_for_status()
+    return response.json()
 
 
 async def fetch_author_info(author_name: str):
@@ -105,34 +145,28 @@ async def fetch_author_info(author_name: str):
         "wikidata": []
     }
 
-    # Fetch from Open Library
     try:
-        response = requests.get(OPEN_LIBRARY_AUTHOR_API, params={"q": author_name})
-        response.raise_for_status()
-        open_library_data = response.json()
+        open_library_data = await request_json(
+            OPEN_LIBRARY_AUTHOR_API,
+            params={"q": author_name}
+        )
 
-        # Collecting all potential authors with all available fields
         for author in open_library_data.get("docs", []):
-            author_info["open_library"].append(author)  # Append the entire author object
+            author_info["open_library"].append(author)
     except Exception as e:
         logging.error(f"Failed to fetch from Open Library: {e}")
 
-    # Fetch from Wikidata
     try:
-        # Search for author on Wikidata
         query_params = {
             "action": "wbsearchentities",
             "search": author_name,
             "language": "en",
             "format": "json"
         }
-        response = requests.get(WIKIDATA_SEARCH_URL, params=query_params)
-        response.raise_for_status()
-        wikidata_data = response.json()
+        wikidata_data = await request_json(WIKIDATA_SEARCH_URL, params=query_params)
 
-        # Collecting all potential authors with all available fields
         for entity in wikidata_data.get("search", []):
-            author_info["wikidata"].append(entity)  # Append the entire entity object
+            author_info["wikidata"].append(entity)
     except Exception as e:
         logging.error(f"Failed to fetch from Wikidata: {e}")
 
